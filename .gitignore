@@ -1,0 +1,8 @@
+# Personal scratch space — never committed
+build_plans/
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
