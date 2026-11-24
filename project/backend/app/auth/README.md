@@ -1,0 +1,13 @@
+# Auth
+
+This directory provides authentication (identifying the current user from a request) and the first half of authorization (checking that user's role-based permissions) for FastAPI routes. It sits between `app/core/security.py` (token mechanics) and `app/permissions` (resource-level/ownership checks), and is the layer routers actually depend on.
+
+## Files
+
+- **`dependencies.py`** — The real implementation. `get_current_user` is a FastAPI dependency that pulls the bearer token via `OAuth2PasswordBearer`, decodes it with `app.core.security.decode_token`, loads the corresponding `User` from the database (eagerly loading `user.role` since many downstream call sites read `user.role.name` outside the async session context), and raises `UnauthorizedError` if the token is invalid or the user is missing/inactive. `get_user_permissions` queries the database (joining `Permission` → `RolePermission` → `Role`) to resolve the set of permission codes granted to the user's role — this is looked up fresh from the database on every call, never trusted from the token. `require_permission(permission)` returns a dependency factory that resolves the user's permissions and raises `ForbiddenError` if the required permission is missing; routes use this to declare what permission they need, independent of whatever the frontend route/UI happens to show.
+
+- **`authorization.py`** — A thin re-export module with no logic of its own. It re-exports `get_current_user` and `require_permission` from `dependencies.py`, and `assert_can_access_shipment` / `assert_can_access_conversation` from `app.permissions.resource_access`, so routers can import all authorization-related dependencies from one place (`app.auth.authorization`) instead of reaching into both `app.auth` and `app.permissions` directly.
+
+## How the pieces relate
+
+The module's docstring in `authorization.py` states the key design point directly: permission checks (role grants a *type* of access, e.g. `shipment:read_own`) and resource checks (whose record it actually is) are deliberately kept as two distinct steps. `dependencies.py` owns the former — it's the only place that talks to the database to resolve a token into a `User` and to decide whether that user's role has a given permission code. It never decides whether a specific shipment or conversation belongs to that user; that's left to `app.permissions.resource_access`, which `authorization.py` re-exports alongside the auth dependencies purely for caller convenience. This means a user can hold `shipment:read_own` generally via `require_permission`, yet still be denied access to one specific shipment that isn't theirs.

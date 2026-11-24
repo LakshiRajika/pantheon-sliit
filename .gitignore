@@ -6,3 +6,14 @@ build_plans/
 Thumbs.db
 .idea/
 .vscode/
+
+.venv/
+__pycache__/
+*.pyc
+.env
+project/backend/uploads/
+project/backend/.env
+project/frontend/node_modules/
+project/frontend/dist/
+.DS_Store
+*.log
