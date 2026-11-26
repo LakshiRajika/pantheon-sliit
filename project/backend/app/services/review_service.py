@@ -56,8 +56,9 @@ class ReviewService:
 
         # Resume the exact paused graph/thread with the officer's decision.
         result = await self.workflow_service.resume(
+            str(workflow.id),
             workflow.thread_id,
-            str(review.shipment_id),
+            review.shipment_id,
             {"decision": decision, "comments": comments},
         )
         return result
