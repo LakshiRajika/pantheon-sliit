@@ -1,0 +1,33 @@
+@import "tailwindcss";
+
+/* Pantheon brand tokens. Usage: bg-cream, text-ink, bg-orange, border-ink/15, etc.
+   Contrast note: orange (#D9541E) on cream is ~3.5:1 — fine for large text, icons,
+   borders and fills, NOT for small body text. Orange buttons use ink text. */
+@theme {
+  --color-cream: #F3EEE3;
+  --color-cream-deep: #E8E0CF;   /* slightly darker cream for hover/inset surfaces */
+  --color-ink: #111111;
+  --color-ink-soft: #2A2A2A;     /* raised surfaces inside the black nav */
+  --color-orange: #D9541E;
+  --color-orange-deep: #B8441A;  /* hover state for orange fills */
+
+  /* Status scale for progress (pills and status bars). Each base colour is used for bars and
+     tinted backgrounds; the "-ink" shade is its text colour (>= 4.5:1 on the tinted background). */
+  --color-success: #2F7A55;
+  --color-success-ink: #1F5B3E;
+  --color-progress: #2E6A9E;
+  --color-progress-ink: #1E4E79;
+  --color-attention-ink: #8A3412;   /* text shade of the brand orange */
+  --color-danger: #B83A2E;
+  --color-danger-ink: #8F1D14;
+
+  --font-display: "Fraunces", Georgia, serif;
+  --font-sans: "IBM Plex Sans", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+}
+
+@layer base {
+  html { background: var(--color-cream); color: var(--color-ink); }
+  body { font-family: var(--font-sans); -webkit-font-smoothing: antialiased; }
+  :focus-visible { outline: 2px solid var(--color-orange); outline-offset: 2px; }
+}
