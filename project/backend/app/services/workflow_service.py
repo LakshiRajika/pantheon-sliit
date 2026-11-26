@@ -76,9 +76,9 @@ class WorkflowService:
             await self._mark_failed(workflow_id, str(exc))
             return
 
-        await self._handle_graph_outcome(workflow_id, thread_id, shipment, result)
+        await self._handle_graph_outcome(workflow_id, thread_id, shipment.id, result)
 
-    async def _handle_graph_outcome(self, workflow_id: str, thread_id: str, shipment: Shipment, result: dict) -> None:
+    async def _handle_graph_outcome(self, workflow_id: str, thread_id: str, shipment_id: uuid.UUID, result: dict) -> None:
         """Interprets the graph's return value after a run or resume. If the
         graph paused on an interrupt (the escalation node asking for human
         review), creates a pending review request and marks the workflow
@@ -95,7 +95,7 @@ class WorkflowService:
                 interrupt_payload = result["__interrupt__"][0].value
                 review = await review_repo.create(
                     workflow_id=workflow.id,
-                    shipment_id=shipment.id,
+                    shipment_id=shipment_id,
                     review_type="RISK_ESCALATION",
                     priority="HIGH",
                     reason=interrupt_payload.get("reason", "Review required."),
@@ -107,7 +107,7 @@ class WorkflowService:
                     build_event(
                         EventType.REVIEW_CREATED,
                         workflow_id,
-                        str(shipment.id),
+                        str(shipment_id),
                         {"review_id": str(review.id), "priority": review.priority, "reason": review.reason},
                     )
                 )
@@ -116,7 +116,7 @@ class WorkflowService:
             await workflow_repo.update_status(workflow, "COMPLETED", final_result=result.get("final_result"))
             await db.commit()
             await manager.broadcast(
-                build_event(EventType.WORKFLOW_COMPLETED, workflow_id, str(shipment.id), result.get("final_result", {}))
+                build_event(EventType.WORKFLOW_COMPLETED, workflow_id, str(shipment_id), result.get("final_result") or {})
             )
 
     async def _mark_failed(self, workflow_id: str, safe_error: str) -> None:
@@ -129,7 +129,7 @@ class WorkflowService:
             await db.commit()
         await manager.broadcast(build_event(EventType.WORKFLOW_FAILED, workflow_id, None, {"safe_error": "Workflow failed."}))
 
-    async def resume(self, thread_id: str, shipment_id: str, human_decision: dict) -> dict:
+    async def resume(self, workflow_id: str, thread_id: str, shipment_id: uuid.UUID, human_decision: dict) -> dict:
         """Resumes a paused workflow from its LangGraph checkpoint with a
         human reviewer's decision injected via Command(resume=...), continuing
         execution from where it was interrupted. Called by the review service
@@ -139,5 +139,12 @@ class WorkflowService:
         checkpointer = get_checkpointer()
         graph = get_compiled_graph(checkpointer)
         config = {"configurable": {"thread_id": thread_id}}
-        result = await graph.ainvoke(Command(resume=human_decision), config=config)
+        try:
+            result = await graph.ainvoke(Command(resume=human_decision), config=config)
+        except Exception as exc:  # noqa: BLE001 - never leave the workflow stuck in AWAITING_REVIEW
+            await self._mark_failed(workflow_id, str(exc))
+            raise
+        # Persist the post-review outcome (COMPLETED + final_result, or a new review if the
+        # graph interrupts again) and broadcast it, exactly as the initial run does.
+        await self._handle_graph_outcome(workflow_id, thread_id, shipment_id, result)
         return result
