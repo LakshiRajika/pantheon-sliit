@@ -50,13 +50,25 @@ Importantly, LangGraph's checkpointer manages its own Postgres tables (`checkpoi
 
 `build_graph()` constructs the `StateGraph(WorkflowState)`:
 
-1. Registers each of the six agent nodes: `tracking`, `documentation`, `congestion`, `risk`, `scheduling`, `escalation` (wrapped as `escalation_node`), plus a `finalize` node.
+1. Registers each of the six agent nodes: `tracking`, `documentation`, `congestion`, `risk`, `scheduling` (each wrapped with `_instrumented(...)`, see below), `escalation` (wrapped as `escalation_node`), plus a `finalize` node.
 2. Wires straight-line edges: `tracking -> documentation -> congestion -> risk`.
 3. Adds the conditional edge out of `risk` using `route_after_risk`, mapping `"escalate" -> escalation` and `"scheduling" -> scheduling`.
 4. Adds the conditional edge out of `escalation` using `route_after_escalation`, mapping `"scheduling" -> scheduling` and `"end" -> finalize`.
 5. Wires `scheduling -> finalize -> END`.
 
 `get_compiled_graph(checkpointer)` compiles the graph once per checkpointer instance and caches it module-level, since compiling is not free and the graph definition itself is stateless.
+
+### `_instrumented(agent_name, agent_fn)`: AgentRun/AgentResult persistence
+
+Graph nodes run outside any request-scoped database session, so each call of this wrapper opens its own dedicated `AsyncSessionLocal()` session to record what happened - this is what actually populates the Admin "Agent Runs" page, not just an internal implementation detail. Before calling the wrapped agent it creates an `AgentRun` row (`WorkflowRepository.start_agent_run`) and commits; after the call it records either `finish_agent_run("COMPLETED", output, duration_ms)` or, if the agent raised, `fail_agent_run(run, duration_ms, "AGENT_ERROR")`, re-raising the original exception either way. Every one of these bookkeeping steps is wrapped in its own try/except that only logs a warning on failure - persistence bugs here must never be able to fail or mask the actual workflow run.
+
+It is applied to the five nodes that run in a straight line - `tracking`, `documentation`, `congestion`, `risk`, `scheduling` - via `_instrumented("tracking_agent", tracking_agent)` etc. in `build_graph()`. `escalation_node` is deliberately left unwrapped: it calls LangGraph's `interrupt()`, and wrapping that in this wrapper's generic try/except would risk mishandling the control-flow signal `interrupt()` uses to pause the graph.
+
+When the wrapped agent is `tracking_agent`, `_instrumented` additionally calls `_record_vessel_position(tracking_result)` on its output before recording completion.
+
+### `_record_vessel_position(tracking_result)`
+
+Called from inside the tracking node's instrumented wrapper. Upserts a `Vessel` row by name (shipment creation doesn't yet collect/link a real vessel, so there's no real IMO number to match on - a synthetic one is minted as `imo_number=f"SIM{uuid4().hex[:9].upper()}"` when a new vessel row is created) and inserts a new `VesselPosition` row from the tracking result's simulated lat/lon, speed, ETA, and data source. This is what populates the Vessels workspace/tracking views with real rows instead of only ever showing the transient per-run simulator output. Like the rest of `_instrumented`, failures here are logged and swallowed rather than propagated - this is a secondary record of data the workflow already produced, never something the pipeline itself depends on.
 
 ### `escalation_node`
 

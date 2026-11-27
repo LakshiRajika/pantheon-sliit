@@ -7,6 +7,7 @@ This package contains the six node implementations that make up the workflow gra
 - **Input**: `shipment_context` (for the vessel name).
 - **Output**: `tracking_result` - vessel name, simulated lat/lon position, speed in knots, an ETA, an `eta_confidence` score, and a `data_source` marker.
 - **LLM**: No. This is a plain data-ingestion node. In production it would poll a live AIS provider; here it falls back to a disclosed simulator calibrated around plausible Colombo-approach ETAs (`data_source: "simulator"`), never presented as real tracking data.
+- **Side effect**: this is the one agent whose output also gets persisted as a standing record, not just returned into graph state. The graph's `_instrumented` wrapper (see `../README.md`) calls `_record_vessel_position()` on this agent's `tracking_result`, which upserts a `Vessel` row (by name, with a synthetic `SIM...` IMO number) and inserts a `VesselPosition` row - this is what backs the Vessels workspace.
 
 ## Documentation Agent (`documentation_agent.py`)
 

@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react'
-import { Pause, Play } from 'lucide-react'
 
 const reducedMotionQuery = () =>
   typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
@@ -22,10 +21,8 @@ function webglAvailable() {
 export default function HeroScene({ className = '' }) {
   const hostRef = useRef(null)
   const [supported] = useState(webglAvailable)
-  const [paused, setPaused] = useState(reducedMotionQuery)
   const [failed, setFailed] = useState(false)
-  const pausedRef = useRef(paused)
-  useEffect(() => { pausedRef.current = paused }, [paused])
+  const pausedRef = useRef(reducedMotionQuery())
 
   useEffect(() => {
     if (!supported) return undefined
@@ -78,15 +75,6 @@ export default function HeroScene({ className = '' }) {
   return (
     <div className={`relative ${className}`}>
       <div ref={hostRef} className="absolute inset-0" />
-      <button
-        type="button"
-        onClick={() => setPaused((p) => !p)}
-        aria-pressed={paused}
-        className="absolute bottom-5 right-5 z-10 inline-flex items-center gap-2 rounded-full border border-ink/20 bg-cream/85 px-3.5 py-2 text-xs font-semibold text-ink backdrop-blur transition hover:border-ink"
-      >
-        {paused ? <Play className="size-3.5" aria-hidden /> : <Pause className="size-3.5" aria-hidden />}
-        {paused ? 'Play animation' : 'Pause animation'}
-      </button>
     </div>
   )
 }

@@ -46,12 +46,24 @@ class WorkflowRepository:
         await self.db.flush()
         return run
 
+    async def get_agent_run(self, run_id: uuid.UUID) -> AgentRun | None:
+        """Fetches a single agent run by ID, or None if not found."""
+        return await self.db.get(AgentRun, run_id)
+
     async def finish_agent_run(self, run: AgentRun, status: str, payload: dict, duration_ms: int) -> None:
         """Marks an agent run as finished, recording its duration and result payload."""
         run.status = status
         run.ended_at = datetime.utcnow()
         run.duration_ms = duration_ms
         self.db.add(AgentResult(agent_run_id=run.id, result_payload=payload))
+        await self.db.flush()
+
+    async def fail_agent_run(self, run: AgentRun, duration_ms: int, safe_error_category: str) -> None:
+        """Marks an agent run as failed, recording its duration and a safe (non-sensitive) error category."""
+        run.status = "FAILED"
+        run.ended_at = datetime.utcnow()
+        run.duration_ms = duration_ms
+        run.safe_error_category = safe_error_category
         await self.db.flush()
 
     async def list_agent_runs(self, workflow_id: uuid.UUID) -> list[AgentRun]:

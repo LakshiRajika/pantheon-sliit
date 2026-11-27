@@ -36,5 +36,20 @@ Contains the actual migration scripts, one per revision, each named `<revision_i
 `upgrade()` and `downgrade()` functions plus `revision`/`down_revision` identifiers that chain migrations together
 in order. As the schema evolves, new files accumulate here; Alembic determines which ones are pending by comparing
 the chain of `down_revision` links against the revision(s) currently recorded in the database's `alembic_version`
-table. The directory currently contains a single migration, `c2b79d5f60f0_initial_schema.py`, which creates the
-full initial set of tables (`down_revision = None`, i.e. the root of the chain).
+table. The directory currently contains two migrations:
+
+- `c2b79d5f60f0_initial_schema.py` — creates the full initial set of tables (`down_revision = None`, i.e. the root
+  of the chain).
+- `e353a485fc1e_add_review_context_snapshot.py` — adds the nullable `context_snapshot` JSON column to
+  `review_requests` (`down_revision = c2b79d5f60f0`).
+
+### Autogenerate gotcha: don't let it drop LangGraph's checkpoint tables
+
+`alembic revision --autogenerate` diffs the live database against `target_metadata` (every SQLAlchemy model). The
+Postgres instance also holds LangGraph's own checkpointer tables (`checkpoints`, `checkpoint_writes`,
+`checkpoint_blobs`, `checkpoint_migrations`), created by `AsyncPostgresSaver.setup()` (see
+`app/workflows/README.md`), which aren't backed by any SQLAlchemy model. Because autogenerate only sees tables it
+doesn't recognize as model-backed, it proposes **dropping** those tables as part of the diff. Running that drop
+would destroy every in-progress/paused workflow's checkpoint data. Any such proposed `op.drop_table(...)` for those
+four tables must be manually stripped out of the generated migration before it's applied — this already happened
+once in `e353a485fc1e_add_review_context_snapshot.py`, where the drops were removed before committing the file.

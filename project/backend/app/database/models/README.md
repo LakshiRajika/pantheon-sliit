@@ -44,7 +44,9 @@ in `app/database/base.py`, so they all register onto the same `Base.metadata` re
 ## review.py — human-in-the-loop review gate
 
 - `ReviewRequest` — a request for human review raised during a workflow, with a type, priority, reason, status
-  (`PENDING` / `RESOLVED`), and an optionally assigned officer.
+  (`PENDING` / `RESOLVED`), an optionally assigned officer, and a `context_snapshot` JSON column: a point-in-time
+  copy of the tracking/document/congestion/risk results that existed when the graph escalated, taken because that
+  upstream state otherwise only lives inside the LangGraph checkpoint, which nothing else reads back.
 - `ReviewDecision` — a human officer's recorded decision resolving a review request (`APPROVE_RECOMMENDATION`,
   `REJECT`, `REQUEST_INFORMATION`), with comments.
 - `ReviewEvidence` — a reference to a piece of supporting evidence (document, risk assessment, or tracking data)

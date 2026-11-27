@@ -9,6 +9,7 @@ import uuid
 from langgraph.types import Command
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.exceptions import ValidationFailedError
 from app.database.models import Shipment
 from app.database.session import AsyncSessionLocal
 from app.repositories.review_repo import ReviewRepository
@@ -34,7 +35,18 @@ class WorkflowService:
     async def start(self, shipment: Shipment, document_paths: list[str]) -> str:
         """Creates a workflow record and kicks off the LangGraph run as a
         background task, returning the new workflow id immediately without
-        waiting for the graph to finish."""
+        waiting for the graph to finish. Rejects the request outright if no
+        documents have been uploaded yet - the Documentation Agent already
+        has a defined behavior for a missing document (it flags the
+        shipment's document status as MISSING_FIELDS, which since the risk
+        agent fix now correctly escalates to human review), but running an
+        entire agent pipeline just to reach that already-knowable conclusion
+        wastes a full workflow run and gives the shipping agent a slow,
+        indirect answer to something that's really just an incomplete form
+        submission."""
+        if not document_paths:
+            raise ValidationFailedError("Upload at least one document before starting the workflow.")
+
         thread_id = f"wf_{uuid.uuid4().hex[:12]}"
         workflow = await self.workflow_repo.create(shipment.id, thread_id)
         await self.db.commit()
@@ -91,8 +103,19 @@ class WorkflowService:
             workflow = await workflow_repo.get(uuid.UUID(workflow_id))
 
             if result.get("__interrupt__"):
-                # Graph paused at escalation_node's interrupt() call.
+                # Graph paused at escalation_node's interrupt() call. The
+                # upstream agents already ran and wrote their results into
+                # this same state dict before the pause, so this is the one
+                # moment that data is available anywhere outside the
+                # (otherwise-opaque) LangGraph checkpoint - snapshot it now,
+                # since nothing else persists it for the reviewer to see.
                 interrupt_payload = result["__interrupt__"][0].value
+                context_snapshot = {
+                    "tracking": result.get("tracking_result"),
+                    "document": result.get("document_result"),
+                    "congestion": result.get("congestion_result"),
+                    "risk": result.get("risk_result"),
+                }
                 review = await review_repo.create(
                     workflow_id=workflow.id,
                     shipment_id=shipment_id,
@@ -100,6 +123,7 @@ class WorkflowService:
                     priority="HIGH",
                     reason=interrupt_payload.get("reason", "Review required."),
                     status="PENDING",
+                    context_snapshot=context_snapshot,
                 )
                 await workflow_repo.update_status(workflow, "AWAITING_REVIEW")
                 await db.commit()

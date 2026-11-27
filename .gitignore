@@ -17,3 +17,4 @@ project/frontend/node_modules/
 project/frontend/dist/
 .DS_Store
 *.log
+*.pid

@@ -79,6 +79,7 @@ export default function ReviewDetailPage() {
       <div className="grid gap-6 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
         <div className="space-y-6">
           <ShipmentSummary shipmentId={review.shipment_id} roleSlug={roleSlug} />
+          <UpstreamContext snapshot={review.context_snapshot} />
           <DocumentsCard shipmentId={review.shipment_id} />
         </div>
         <div className="space-y-6">
@@ -92,6 +93,44 @@ export default function ReviewDetailPage() {
         </div>
       </div>
     </div>
+  )
+}
+
+function UpstreamContext({ snapshot }) {
+  if (!snapshot) {
+    return (
+      <Card title="Risk assessment & evidence">
+        <p className="text-sm text-ink/55">
+          No evidence snapshot was captured for this review (it was raised before this view existed).
+        </p>
+      </Card>
+    )
+  }
+  const sections = [
+    ['risk', 'Risk assessment'],
+    ['document', 'Document findings'],
+    ['tracking', 'Tracking'],
+    ['congestion', 'Congestion forecast'],
+  ]
+  const available = sections.filter(([key]) => snapshot[key])
+  if (!available.length) {
+    return (
+      <Card title="Risk assessment & evidence">
+        <p className="text-sm text-ink/55">No evidence was recorded for this review.</p>
+      </Card>
+    )
+  }
+  return (
+    <Card title="Risk assessment & evidence">
+      <div className="space-y-4">
+        {available.map(([key, label]) => (
+          <div key={key} className="rounded-md border border-ink/10 p-3">
+            <p className="mb-2 text-sm font-semibold">{label}</p>
+            <ResultView value={snapshot[key]} />
+          </div>
+        ))}
+      </div>
+    </Card>
   )
 }
 

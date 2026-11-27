@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, String, Text
+from sqlalchemy import JSON, DateTime, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -22,6 +22,11 @@ class ReviewRequest(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     status: Mapped[str] = mapped_column(String(30), default="PENDING")  # PENDING | RESOLVED
     assigned_officer_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Point-in-time copy of the tracking/document/congestion/risk results that
+    # existed when the graph escalated, taken because none of that upstream
+    # state is otherwise persisted anywhere while a review is pending (it only
+    # lives inside the LangGraph checkpoint, which nothing else reads back).
+    context_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     decisions: Mapped[list["ReviewDecision"]] = relationship(back_populates="review_request")
     evidence: Mapped[list["ReviewEvidence"]] = relationship(back_populates="review_request")

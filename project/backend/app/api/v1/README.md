@@ -35,6 +35,9 @@ The table below summarizes every endpoint. "Auth only" means the endpoint only r
 | POST | `/chat/conversations/{conversation_id}/messages` | `CHAT_USE` |
 | GET | `/admin/health` | `ADMIN_SYSTEM_READ` |
 | GET | `/admin/users` | `ADMIN_USERS_MANAGE` |
+| POST | `/admin/users` | `ADMIN_USERS_MANAGE` |
+| PATCH | `/admin/users/{user_id}/role` | `ADMIN_USERS_MANAGE` |
+| PATCH | `/admin/users/{user_id}/status` | `ADMIN_USERS_MANAGE` |
 | GET | `/admin/audit` | `ADMIN_AUDIT_READ` |
 | GET | `/admin/agent-runs` | `ADMIN_SYSTEM_READ` |
 | GET | `/admin/workflows` | `ADMIN_SYSTEM_READ` |
@@ -103,6 +106,9 @@ All three endpoints require `CHAT_USE`.
 
 - `GET /admin/health` — requires `ADMIN_SYSTEM_READ`. Returns system health information.
 - `GET /admin/users` — requires `ADMIN_USERS_MANAGE`. Lists all user accounts.
+- `POST /admin/users` — requires `ADMIN_USERS_MANAGE`. Creates a new user account with a given role.
+- `PATCH /admin/users/{user_id}/role` — requires `ADMIN_USERS_MANAGE`. Reassigns a user's role.
+- `PATCH /admin/users/{user_id}/status` — requires `ADMIN_USERS_MANAGE`. Activates or deactivates a user account.
 - `GET /admin/audit` — requires `ADMIN_AUDIT_READ`. Returns the audit log of actor actions and outcomes.
 - `GET /admin/agent-runs` — requires `ADMIN_SYSTEM_READ`. Lists recent agent runs with status, duration, and retries.
 - `GET /admin/workflows` — requires `ADMIN_SYSTEM_READ`. Returns a monitoring view of active and recent workflows.

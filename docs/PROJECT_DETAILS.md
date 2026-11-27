@@ -112,6 +112,12 @@ project, as required by the competition guidelines:
 - **Claude Code** (Anthropic), running on **Claude Sonnet 5** — used for
   project documentation, architecture planning, and implementation support.
 
-*(Update this section if additional AI tools or models are used elsewhere
-in the project, e.g., for the LLM calls inside the agents themselves, or
-for other parts of the build.)*
+The following LLM providers and models are used at runtime, inside the
+product itself, by the Risk & Inspection Agent and the role-specific chat
+assistants. They are tried in order, with each one falling back to the
+next on failure, and a deterministic rule-based fallback underneath all
+three if none are available:
+
+- **Groq** — `openai/gpt-oss-120b`
+- **Google Gemini** — `gemini-flash-latest`
+- **OpenRouter** — `openrouter/free`

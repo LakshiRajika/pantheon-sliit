@@ -1,8 +1,16 @@
 """Builds and compiles the LangGraph StateGraph that wires the six agent nodes into the end-to-end workflow."""
 
+import logging
+import uuid
+from datetime import datetime, timezone
+
 from langgraph.graph import END, StateGraph
 from langgraph.types import interrupt
+from sqlalchemy import select
 
+from app.database.models import Vessel, VesselPosition
+from app.database.session import AsyncSessionLocal
+from app.repositories.workflow_repo import WorkflowRepository
 from app.workflows.agents import (
     congestion_agent,
     documentation_agent,
@@ -14,7 +22,111 @@ from app.workflows.agents import (
 from app.workflows.routing import route_after_escalation, route_after_risk
 from app.workflows.state import WorkflowState
 
+logger = logging.getLogger(__name__)
+
 _compiled_graph = None
+
+
+async def _record_vessel_position(tracking_result: dict) -> None:
+    """Upserts a Vessel row (by name, since no real IMO number is collected
+    at shipment creation yet) and inserts a VesselPosition from the Tracking
+    Agent's output, so the Vessels workspace has real rows to list instead
+    of only ever showing the transient per-run simulator output. Failures
+    here are logged and swallowed - this is a secondary record of data the
+    workflow already produced, never something the pipeline itself depends
+    on, so it must never be able to fail a shipment's processing.
+    """
+    vessel_name = tracking_result.get("vessel_name")
+    if not vessel_name:
+        return
+    try:
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(select(Vessel).where(Vessel.name == vessel_name))
+            vessel = result.scalar_one_or_none()
+            if vessel is None:
+                vessel = Vessel(name=vessel_name, imo_number=f"SIM{uuid.uuid4().hex[:9].upper()}", vessel_type="simulated")
+                db.add(vessel)
+                await db.flush()
+
+            position = tracking_result.get("position") or {}
+            eta_raw = tracking_result.get("eta")
+            eta = datetime.fromisoformat(eta_raw) if eta_raw else None
+            db.add(
+                VesselPosition(
+                    vessel_id=vessel.id,
+                    latitude=position.get("lat", 0),
+                    longitude=position.get("lon", 0),
+                    speed_knots=tracking_result.get("speed_knots"),
+                    eta=eta,
+                    recorded_at=datetime.now(timezone.utc),
+                    source=tracking_result.get("data_source", "simulator"),
+                )
+            )
+            await db.commit()
+    except Exception as exc:  # noqa: BLE001 - this is best-effort bookkeeping, never a pipeline failure
+        logger.warning("Failed to record vessel position (non-fatal): %s", exc)
+
+
+def _instrumented(agent_name: str, agent_fn):
+    """Wraps an agent node with AgentRun/AgentResult persistence so the Admin
+    "Agent Runs" view has real data, without changing the agent's own logic
+    or return value at all. Only applied to the five nodes that run in a
+    straight line (tracking through scheduling) - escalation_node is
+    deliberately left unwrapped, since it calls LangGraph's interrupt() and
+    wrapping that in a generic try/except here would risk mishandling the
+    control-flow signal interrupt() uses to pause the graph.
+    """
+
+    async def node(state: WorkflowState) -> dict:
+        workflow_id = state.get("workflow_id")
+        started_at = datetime.now(timezone.utc)
+        run_id = None
+        if workflow_id:
+            try:
+                async with AsyncSessionLocal() as db:
+                    repo = WorkflowRepository(db)
+                    run = await repo.start_agent_run(uuid.UUID(workflow_id), agent_name)
+                    run_id = run.id
+                    await db.commit()
+            except Exception as exc:  # noqa: BLE001 - never block the actual workflow on bookkeeping
+                logger.warning("Failed to record start of agent run '%s' (non-fatal): %s", agent_name, exc)
+
+        try:
+            output = await agent_fn(state)
+        except Exception:
+            if run_id is not None:
+                try:
+                    duration_ms = int((datetime.now(timezone.utc) - started_at).total_seconds() * 1000)
+                    async with AsyncSessionLocal() as db:
+                        repo = WorkflowRepository(db)
+                        run = await repo.get_agent_run(run_id)
+                        if run is not None:
+                            await repo.fail_agent_run(run, duration_ms, "AGENT_ERROR")
+                            await db.commit()
+                except Exception as exc:  # noqa: BLE001 - never mask the real error with a bookkeeping failure
+                    logger.warning("Failed to record failure of agent run '%s' (non-fatal): %s", agent_name, exc)
+            raise
+
+        if agent_name == "tracking_agent":
+            tracking_result = output.get("tracking_result")
+            if tracking_result:
+                await _record_vessel_position(tracking_result)
+
+        if run_id is not None:
+            try:
+                duration_ms = int((datetime.now(timezone.utc) - started_at).total_seconds() * 1000)
+                async with AsyncSessionLocal() as db:
+                    repo = WorkflowRepository(db)
+                    run = await repo.get_agent_run(run_id)
+                    if run is not None:
+                        await repo.finish_agent_run(run, "COMPLETED", output, duration_ms)
+                        await db.commit()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Failed to record completion of agent run '%s' (non-fatal): %s", agent_name, exc)
+
+        return output
+
+    return node
 
 
 async def escalation_node(state: WorkflowState) -> dict:
@@ -62,11 +174,11 @@ def build_graph():
     """
     graph = StateGraph(WorkflowState)
 
-    graph.add_node("tracking", tracking_agent)
-    graph.add_node("documentation", documentation_agent)
-    graph.add_node("congestion", congestion_agent)
-    graph.add_node("risk", risk_agent)
-    graph.add_node("scheduling", scheduling_agent)
+    graph.add_node("tracking", _instrumented("tracking_agent", tracking_agent))
+    graph.add_node("documentation", _instrumented("documentation_agent", documentation_agent))
+    graph.add_node("congestion", _instrumented("congestion_agent", congestion_agent))
+    graph.add_node("risk", _instrumented("risk_agent", risk_agent))
+    graph.add_node("scheduling", _instrumented("scheduling_agent", scheduling_agent))
     graph.add_node("escalation", escalation_node)
     graph.add_node("finalize", finalize_node)
 

@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { Search, Activity, ScrollText, RefreshCw, CircleCheck, CircleAlert, CircleQuestionMark } from 'lucide-react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Search, Activity, ScrollText, RefreshCw, CircleCheck, CircleAlert, CircleQuestionMark, Plus, X } from 'lucide-react'
 import * as adminApi from '../../api/admin'
 import { useRealtime } from '../../contexts/WebSocketContext'
 import { ROLES } from '../../routes/roleRoutes'
@@ -15,9 +15,21 @@ import { formatDateTime, humanize } from '../../utils/format'
 /* ---------------------------------------------------------------- Users */
 
 export function UsersPage() {
+  const qc = useQueryClient()
   const { data, isLoading, error, refetch } = useQuery({ queryKey: ['admin', 'users'], queryFn: adminApi.listUsers })
   const [q, setQ] = useState('')
   const [role, setRole] = useState('ALL')
+  const [showCreate, setShowCreate] = useState(false)
+
+  const invalidateUsers = () => qc.invalidateQueries({ queryKey: ['admin', 'users'] })
+  const roleMutation = useMutation({
+    mutationFn: ({ userId, role: newRole }) => adminApi.assignRole(userId, newRole),
+    onSuccess: invalidateUsers,
+  })
+  const statusMutation = useMutation({
+    mutationFn: ({ userId, isActive }) => adminApi.setUserStatus(userId, isActive),
+    onSuccess: invalidateUsers,
+  })
 
   const rows = useMemo(() => {
     const needle = q.trim().toLowerCase()
@@ -47,7 +59,12 @@ export function UsersPage() {
             {Object.entries(ROLES).map(([k, r]) => <option key={k} value={k}>{r.label}</option>)}
           </select>
         </label>
+        <Button variant="outline" icon={showCreate ? X : Plus} onClick={() => setShowCreate((v) => !v)}>
+          {showCreate ? 'Cancel' : 'New user'}
+        </Button>
       </div>
+
+      {showCreate && <CreateUserForm onDone={() => { setShowCreate(false); invalidateUsers() }} />}
 
       <div className="overflow-hidden rounded-lg border-2 border-ink/10">
         <table className="w-full text-left text-sm">
@@ -61,19 +78,86 @@ export function UsersPage() {
               <tr key={u.id} className="bg-cream">
                 <td className="px-4 py-3 font-medium">{u.full_name}<span className="block text-xs font-normal text-ink/55 md:hidden">{u.email}</span></td>
                 <td className="hidden px-4 py-3 text-ink/75 md:table-cell">{u.email}</td>
-                <td className="px-4 py-3">{ROLES[u.role]?.label ?? humanize(u.role)}</td>
-                <td className="px-4 py-3"><StatusBadge value={u.is_active ? 'ACTIVE' : 'INACTIVE'} /></td>
+                <td className="px-4 py-3">
+                  <select
+                    value={u.role}
+                    disabled={roleMutation.isPending}
+                    onChange={(e) => roleMutation.mutate({ userId: u.id, role: e.target.value })}
+                    className="rounded-md border-2 border-ink/15 bg-white/60 px-2 py-1 text-sm focus:border-ink focus:outline-none"
+                  >
+                    {Object.entries(ROLES).map(([k, r]) => <option key={k} value={k}>{r.label}</option>)}
+                  </select>
+                </td>
+                <td className="px-4 py-3">
+                  <button
+                    type="button"
+                    disabled={statusMutation.isPending}
+                    onClick={() => statusMutation.mutate({ userId: u.id, isActive: !u.is_active })}
+                    className="inline-flex items-center gap-2 disabled:opacity-50"
+                    title={u.is_active ? 'Deactivate account' : 'Activate account'}
+                  >
+                    <StatusBadge value={u.is_active ? 'ACTIVE' : 'INACTIVE'} />
+                  </button>
+                </td>
               </tr>
             ))}
           </tbody>
         </table>
         {!rows.length && <EmptyState title="No users match your filters" />}
       </div>
-      <p className="text-xs text-ink/50">
-        {rows.length} of {data.length} users. Role changes and account activation aren’t available yet: the backend has no
-        endpoints for them.
-      </p>
+      {(roleMutation.isError || statusMutation.isError) && (
+        <p role="alert" className="flex items-center gap-2 text-sm text-orange">
+          <CircleAlert className="size-4" aria-hidden /> {(roleMutation.error ?? statusMutation.error)?.message}
+        </p>
+      )}
+      <p className="text-xs text-ink/50">{rows.length} of {data.length} users. Click a status pill to activate or deactivate an account.</p>
     </div>
+  )
+}
+
+function CreateUserForm({ onDone }) {
+  const [form, setForm] = useState({ full_name: '', email: '', password: '', role: 'shipping_agent' })
+  const create = useMutation({ mutationFn: () => adminApi.createUser(form), onSuccess: onDone })
+
+  return (
+    <Card title="Create user">
+      <form
+        onSubmit={(e) => { e.preventDefault(); create.mutate() }}
+        className="grid gap-3 sm:grid-cols-2"
+      >
+        <Field label="Full name">
+          <input required value={form.full_name} onChange={(e) => setForm({ ...form, full_name: e.target.value })}
+            className="w-full rounded-md border-2 border-ink/15 bg-white/60 px-3 py-2 text-sm focus:border-ink focus:outline-none" />
+        </Field>
+        <Field label="Email">
+          <input required type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })}
+            className="w-full rounded-md border-2 border-ink/15 bg-white/60 px-3 py-2 text-sm focus:border-ink focus:outline-none" />
+        </Field>
+        <Field label="Temporary password">
+          <input required type="text" minLength={8} value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })}
+            className="w-full rounded-md border-2 border-ink/15 bg-white/60 px-3 py-2 text-sm focus:border-ink focus:outline-none" />
+        </Field>
+        <Field label="Role">
+          <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}
+            className="w-full rounded-md border-2 border-ink/15 bg-white/60 px-3 py-2 text-sm focus:border-ink focus:outline-none">
+            {Object.entries(ROLES).map(([k, r]) => <option key={k} value={k}>{r.label}</option>)}
+          </select>
+        </Field>
+        <div className="sm:col-span-2 flex items-center gap-3">
+          <Button type="submit" loading={create.isPending}>Create account</Button>
+          {create.isError && <span className="text-sm text-orange">{create.error.message}</span>}
+        </div>
+      </form>
+    </Card>
+  )
+}
+
+function Field({ label, children }) {
+  return (
+    <label className="block text-sm">
+      <span className="mb-1 block font-semibold">{label}</span>
+      {children}
+    </label>
   )
 }
 
@@ -191,8 +275,16 @@ export function SystemHealthPage() {
     { name: 'API', state: error ? (error.status === 0 ? 'down' : 'degraded') : data ? toState(data.api) : 'unknown', detail: error ? error.message : 'Responds to authenticated requests' },
     { name: 'Database', state: error ? 'unknown' : data ? toState(data.database) : 'unknown', detail: 'Connectivity probe from the API' },
     { name: 'Live updates (WebSocket)', state: connection === 'live' ? 'ok' : connection === 'offline' ? 'down' : 'degraded', detail: `This browser: ${connection}` },
-    { name: 'LLM providers', state: 'unknown', detail: 'Not reported by the backend yet' },
-    { name: 'Document storage', state: 'unknown', detail: 'Not reported by the backend yet' },
+    {
+      name: 'LLM providers',
+      state: error ? 'unknown' : data ? toState(data.llm_providers) : 'unknown',
+      detail: data?.llm_providers === 'not_configured' ? 'No Groq/Gemini/OpenRouter key configured' : 'At least one provider key is configured',
+    },
+    {
+      name: 'Document storage',
+      state: error ? 'unknown' : data ? toState(data.document_storage) : 'unknown',
+      detail: data?.document_storage === 'unavailable' ? 'Upload directory missing or not writable' : 'Upload directory is writable',
+    },
   ]
 
   return (

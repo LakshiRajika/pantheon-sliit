@@ -47,8 +47,9 @@ export default function WorkflowPanel({ shipmentId, documentCount }) {
   })
   const start = useStartWorkflow(shipmentId)
 
+  const noDocuments = documentCount === 0
   const startButton = (label, icon) => canStart && (
-    <Button onClick={() => start.mutate()} loading={start.isPending} icon={icon}>{label}</Button>
+    <Button onClick={() => start.mutate()} loading={start.isPending} icon={icon} disabled={noDocuments}>{label}</Button>
   )
 
   return (
@@ -60,10 +61,10 @@ export default function WorkflowPanel({ shipmentId, documentCount }) {
               ? 'Run the six-agent analysis on this shipment and its uploaded documents. You can leave this page — the workflow runs on the server.'
               : 'No workflow has been started for this shipment from this browser.'}
           </p>
-          {canStart && documentCount === 0 && (
+          {canStart && noDocuments && (
             <p className="flex items-start gap-2 text-sm">
               <Info className="mt-0.5 size-4 shrink-0 text-orange" aria-hidden />
-              No documents uploaded yet — the Documentation Agent will report them as missing.
+              Upload at least one document before starting the workflow.
             </p>
           )}
           {startButton('Start AI analysis', Play)}

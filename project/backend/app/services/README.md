@@ -52,10 +52,28 @@ service.
 
 ## AdminService (`admin_service.py`)
 
-Backs the Admin workspace: listing users, reassigning a user's role,
-activating/deactivating an account, reading recent audit log entries,
+Backs the Admin workspace: listing and creating users, reassigning a user's
+role, activating/deactivating an account, reading recent audit log entries,
 listing recent agent runs, summarizing workflow counts by status, and a
-basic health check that probes database connectivity.
+health check.
+
+- `create_user(email, full_name, password, role_name)` creates a new account,
+  raising `ConflictError` if the email is already registered or
+  `ValidationFailedError` if the role name doesn't exist - the same checks
+  the self-service registration endpoint applies, since an admin creating an
+  account on someone else's behalf is the same underlying operation.
+- `set_role(user_id, role_name)` and `set_status(user_id, is_active)` take
+  raw ids, raise `NotFoundError` if the user doesn't exist, and both return a
+  freshly-fetched `User` rather than the mutated instance. `set_role`
+  specifically calls `self.db.expire(user, ["role"])` after commit: since the
+  session doesn't expire attributes on commit (`expire_on_commit=False`), the
+  already-loaded `role` relationship would otherwise keep pointing at the old
+  role even after `role_id` has changed and been committed.
+- `health()` checks database connectivity, and also reports `llm_providers`
+  (`ok`/`not_configured` based on whether any LLM provider API key is set -
+  never a real, billed call to a provider just to render a status dot) and
+  `document_storage` (`ok`/`unavailable` based on whether the upload
+  directory exists and is writable).
 
 ## WorkflowService (`workflow_service.py`)
 
@@ -67,7 +85,19 @@ design:
   then dispatches the actual graph run as a background asyncio task
   (`asyncio.create_task(self._run_graph(...))`) rather than awaiting it.
   The caller — shipment submission — gets back a `workflow_id` right away
-  without blocking on every agent in the graph executing.
+  without blocking on every agent in the graph executing. It first rejects
+  the request outright with a `ValidationFailedError` (-> HTTP 422) if no
+  documents have been uploaded yet — the Documentation Agent already has a
+  defined behavior for a missing document (it flags `MISSING_FIELDS`, which
+  escalates to human review), but running an entire agent pipeline just to
+  reach that already-knowable conclusion wastes a full workflow run.
+- **Escalation snapshots upstream context onto the review row.**
+  `_handle_graph_outcome()` is the one moment the tracking/document/
+  congestion/risk results produced so far are available anywhere outside
+  LangGraph's own opaque checkpoint. When the graph interrupts, it captures
+  those four results into a `context_snapshot` dict and stores it on the
+  created `ReviewRequest` row, since nothing else persists that upstream
+  state for the reviewer to see while the review is pending.
 - **The LangGraph checkpoint is not the review queue.** The graph run uses
   its own LangGraph checkpointer (`get_checkpointer()`), keyed by
   `thread_id`, to persist and resume execution state. That checkpoint is a

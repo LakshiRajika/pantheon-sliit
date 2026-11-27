@@ -75,8 +75,9 @@ Schemas for shipment document metadata and validation results:
 Schemas for the human-review gate:
 
 - `ReviewOut` - a pending or resolved review item: id, the shipment it
-  belongs to, review type, priority, reason, status, and creation timestamp,
-  built from an ORM object.
+  belongs to, review type, priority, reason, status, creation timestamp, and
+  an optional `context_snapshot` dict (the point-in-time tracking/document/
+  congestion/risk snapshot taken at escalation), built from an ORM object.
 - `ReviewDecisionRequest` - a reviewer's decision on a review item: the
   decision itself (`APPROVE_RECOMMENDATION`, `REJECT`, or
   `REQUEST_INFORMATION`), optional comments, and an optional list of
@@ -88,7 +89,12 @@ Schemas for shipments:
 
 - `ShipmentCreate` - fields submitted when registering a new shipment
   (reference, vessel name, cargo description/category, origin/destination
-  ports, importer id).
+  ports, importer id). Has field validators: `shipment_reference` must match
+  `^[A-Za-z0-9-]{3,50}$` (3-50 characters of letters, digits, and hyphens),
+  and `origin_port`/`destination_port` reject a value that's nothing but
+  digits via a shared `_reject_pure_digits` check, since a real port name
+  always has at least one letter (otherwise deliberately lenient, since real
+  port/terminal codes do mix letters, digits, and punctuation).
 - `ShipmentOut` - the public view of a shipment: id, reference, status, risk
   level, origin/destination ports, estimated arrival, and creation
   timestamp, built from an ORM object.

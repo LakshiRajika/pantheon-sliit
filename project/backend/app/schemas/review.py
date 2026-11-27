@@ -17,6 +17,7 @@ class ReviewOut(BaseModel):
     reason: str
     status: str
     created_at: datetime
+    context_snapshot: dict | None = None
 
     model_config = {"from_attributes": True}
 

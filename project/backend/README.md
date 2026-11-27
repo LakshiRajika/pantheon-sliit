@@ -111,6 +111,10 @@ Documentation ────┘                       ├──► Risk & Inspecti
 - **Scheduling Agent** — produces a berth/resource recommendation that accounts for both the congestion forecast and whether the shipment will need an inspection slot. It does not execute anything; it's a recommendation, same as everything upstream of the human gate.
 - **Escalation / Human Oversight node** — the mandatory gate. If the Risk Agent's output is high-risk, low-confidence, or the document was flagged inconsistent, the graph calls LangGraph's `interrupt()` here, which genuinely pauses execution and writes a checkpoint — this is not a status field that a bug elsewhere could skip. A pending review record is created (a *business* record, deliberately kept separate from the *execution* checkpoint — see `app/workflows/README.md` for why those two are not the same thing and both are needed), and the connected WebSocket clients authorized to see it are notified. When an officer submits a decision, the graph resumes from that exact point via `Command(resume=...)` — nothing upstream re-runs.
 
+Five of the six nodes — every node except escalation, deliberately, since wrapping `interrupt()`'s control-flow signal in a generic handler would risk mishandling it — are wrapped by an `_instrumented(agent_name, agent_fn)` helper in `graph.py` that persists an `AgentRun`/`AgentResult` row per execution via its own dedicated database session (graph nodes don't have a request-scoped one). This is what actually populates the Admin "Agent Runs" view; it was initially a known gap (see below) and has since been wired up. The same wrapper, specifically for the tracking node, also calls `_record_vessel_position()`, which upserts a `Vessel` row (keyed by name, with a synthetic `imo_number` like `SIM<hex>` since shipment creation doesn't yet collect a real IMO) and inserts a `VesselPosition` — so the Port Operations vessel view has real, queryable rows instead of only ever showing a run's transient in-memory output.
+
+The pending review record created at the escalation node also captures a `context_snapshot` — the tracking, document, congestion, and risk results produced earlier in that same run — onto the `ReviewRequest` row. This is the one point in the whole system that upstream agent state is available anywhere outside LangGraph's own opaque checkpoint, so it's captured there rather than reconstructed later; it's what lets a reviewing officer see the full evidence behind a flagged shipment immediately on `GET /reviews/{id}`.
+
 ### The escalation / resume cycle, as a sequence
 
 This is the single most important flow in the system — it's the difference between "a pipeline that produces a risk score" and "a pipeline a port could actually trust":
@@ -167,9 +171,9 @@ The safety pipeline (`app/safety/`) treats every external input the same way reg
 
 ## What actually got built, and what's a known gap
 
-This backend was built, then independently tested end-to-end against its own design — every router exercised, including the full submit → workflow → escalate → review → resume cycle, WebSocket delivery with role filtering, chat's success and graceful-degradation paths, and the authorization boundary cases (wrong-owner access, missing permission, expired token, double-deciding a review). Eight real bugs were found and fixed in that process — among them, a Windows-specific event-loop ordering issue that broke the server outright, a regex bug that captured the literal word "Number" instead of a real bill-of-lading number, and a PII redaction pass that was destroying legitimate document reference numbers before extraction ever saw them. The full list, with root cause and fix for each, is in `../../build_plans/Backend_errors.md`.
+This backend was built, then independently tested end-to-end against its own design — every router exercised, including the full submit → workflow → escalate → review → resume cycle, WebSocket delivery with role filtering, chat's success and graceful-degradation paths, and the authorization boundary cases (wrong-owner access, missing permission, expired token, double-deciding a review). Eleven real bugs were found and fixed across this process (not just the initial build) — among them, a Windows-specific event-loop ordering issue that broke the server outright, a regex bug that captured the literal word "Number" instead of a real bill-of-lading number, a PII redaction pass that was destroying legitimate document reference numbers before extraction ever saw them, a stale-relationship cache that showed an admin's own role change as unapplied within the same request, and a missing guard that let a workflow be started with zero uploaded documents. The full list, with root cause and fix for each, is in `../../build_plans/Backend_errors.md`.
 
-A small number of features are intentionally unfinished rather than broken: `DocumentExtraction`, `AgentRun`/`AgentResult`, and `AuditLog` all exist as database tables with a clear purpose, but nothing currently writes rows into them — extraction results and agent timing only live in LangGraph's in-memory workflow state for the duration of a run, and the admin audit log is consequently always empty (login events are tracked separately, via `login_events`, and that path does work). Wiring these up is a well-scoped follow-up, not a redesign.
+Two of the originally-unwired tables are now wired up: `AgentRun`/`AgentResult` rows are written by every non-escalation graph node via the `_instrumented()` wrapper in `app/workflows/graph.py`, and the reviewer-facing need that `DocumentExtraction` was meant to serve is now covered by the `context_snapshot` captured directly onto each `ReviewRequest` at the moment of escalation (see "The multi-agent workflow, in detail" above) — a more direct fix than wiring the standalone table would have been, since the snapshot is scoped exactly to what a reviewer needs rather than every intermediate extraction. What's still a genuine, intentionally unfinished gap: `AuditLog` exists as a table with a clear purpose, but nothing writes rows into it — admin's audit view is consequently always empty (login events are tracked separately, via `login_events`, and that path does work). Wiring this up is a well-scoped follow-up, not a redesign.
 
 ## Use cases
 
@@ -182,6 +186,10 @@ A shipping agent registers a new shipment (`POST /shipments`) and uploads its bi
 ### 2. Shipping agent submits a shipment with an incomplete document
 
 Same flow, except the uploaded document is missing its container number. The Documentation Agent correctly reports `MISSING_FIELDS` instead of inventing a value or silently ignoring the gap. Because an incomplete declaration is itself a risk signal, the Risk Agent (or its deterministic fallback, if every LLM provider is down) flags the shipment for inspection, and the graph pauses at the human-review gate rather than letting an incomplete declaration through automatically.
+
+### 2a. Shipping agent tries to start a workflow with no documents uploaded
+
+`POST /shipments/{id}/workflow` rejects the request outright with a `422` if `document_paths` is empty, rather than running a full six-agent pipeline just to reach an already-knowable conclusion. The Documentation Agent already has defined behavior for a missing document (`MISSING_FIELDS`, which correctly escalates to human review per the fix above), but that's a slow, indirect way to tell a shipping agent they forgot to attach anything — the check happens in `workflow_service.start()` before any graph run is even dispatched.
 
 ### 3. Customs officer works the review queue
 
@@ -202,6 +210,12 @@ A management user hits `GET /analytics/dashboard` for a cross-cutting view: tota
 ### 7. Admin monitors system health, without a chatbot
 
 An administrator checks `GET /admin/health`, `/admin/users`, `/admin/agent-runs`, and `/admin/audit` to confirm the system is operating correctly and to manage accounts. There is deliberately no `POST /chat/conversations` available to this role (it returns `403 Forbidden` even though the admin is otherwise a superuser) — the admin workspace is a technical console, not an operational one, and giving an LLM assistant standing access to system administration isn't a risk worth taking for a feature nobody in that role actually needs.
+
+`GET /admin/health` also reports `llm_providers` (`"ok"` if at least one of the Groq/Gemini/OpenRouter API keys is configured, `"not_configured"` otherwise — this check never makes a real API call) and `document_storage` (whether the upload directory exists and is writable), alongside the existing database/checkpointer checks.
+
+### 8. Admin manages user accounts
+
+An administrator creates a new user (`POST /admin/users`, reusing the same registration schema as self-service signup) and can change any user's role (`PATCH /admin/users/{id}/role`) or active status (`PATCH /admin/users/{id}/status`), all gated behind the `ADMIN_USERS_MANAGE` permission. Changing a user's role takes effect immediately and is reflected correctly even in the response to that same request — an earlier version of this had a same-session caching bug where the just-updated role wouldn't show up until a later, separate request; `set_role()` now explicitly expires the cached relationship after commit so the re-fetch is never stale.
 
 ## Tech stack
 
